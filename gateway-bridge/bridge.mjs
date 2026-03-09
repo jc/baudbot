@@ -48,6 +48,8 @@ const SOCKET_DIR = path.join(homedir(), ".pi", "session-control");
 const AGENT_TIMEOUT_MS = 120_000;
 const API_PORT = parseInt(process.env.BRIDGE_API_PORT || "7890", 10);
 const REPLY_LEDGER_PATH = path.join(homedir(), ".pi", "agent", "slack-reply-log.jsonl");
+const REPLY_LEDGER_ROTATED_PATH = `${REPLY_LEDGER_PATH}.1`;
+const REPLY_LEDGER_MAX_BYTES = 10 * 1024 * 1024;
 
 // Validate required env vars
 for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]) {
@@ -121,6 +123,17 @@ function resolveAckReaction(channel, threadTs) {
  * Append a durable outbound-reply proof entry used by heartbeat reply detection.
  * This tracks replies from both /send (with thread_ts) and /reply endpoints.
  */
+function rotateReplyLedgerIfNeeded() {
+  try {
+    const stats = fs.statSync(REPLY_LEDGER_PATH);
+    if (stats.size < REPLY_LEDGER_MAX_BYTES) return;
+    fs.renameSync(REPLY_LEDGER_PATH, REPLY_LEDGER_ROTATED_PATH);
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return;
+    console.warn(`⚠️ failed to rotate reply ledger: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function appendReplyLedgerEntry({ channel, threadTs, route }) {
   if (!threadTs) return;
 
@@ -133,12 +146,13 @@ function appendReplyLedgerEntry({ channel, threadTs, route }) {
 
   try {
     fs.mkdirSync(path.dirname(REPLY_LEDGER_PATH), { recursive: true });
+    rotateReplyLedgerIfNeeded();
     fs.appendFileSync(REPLY_LEDGER_PATH, `${JSON.stringify(entry)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
   } catch (err) {
-    console.warn(`⚠️ failed to append reply ledger entry: ${err.message}`);
+    console.warn(`⚠️ failed to append reply ledger entry: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
