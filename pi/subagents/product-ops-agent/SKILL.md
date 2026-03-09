@@ -75,6 +75,22 @@ Prefer updating existing entries when superseded so stale guidance does not accu
 2. Confirm readiness to control-agent
 3. Stand by for routed requests
 
+## Task Envelope Contract (from control-agent)
+
+Expect each routed task message to include:
+- `todo_id`
+- `thread_ref`
+- `repos`
+- `time_window` (or `n/a`)
+- `objective`
+- `done_when`
+- `deployment_marker` (or `n/a`)
+- `mode` (`follow_up_same_thread` or `new_thread`)
+
+Behavior:
+- If envelope fields are missing or ambiguous, ask control-agent for clarification before deep investigation.
+- A single task may mix product-behavior and production-state questions; do not require a separate request-type field.
+
 ## Keep Codebase Fresh Before Code Answers
 
 Before answering a code question for a repo under `~/workspace/<repo>`:

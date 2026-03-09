@@ -131,6 +131,18 @@ Default routing:
 - **Code-change execution (fixes, features, tests, PR/CI loop)** → spawn `dev-agent`
 - **Unclear requests** → route to `product-ops-agent` first, then escalate to dev-agent if code changes are needed
 
+#### product-ops-agent queue policy (single-session)
+
+`product-ops-agent` is treated as a single-worker queue.
+
+- Process only one product-ops task at a time.
+- Queue additional product-ops requests as todos.
+- Priority rule: if any queued item is a follow-up for the **currently active thread/todo**, process that follow-up next before unrelated queued requests.
+- When switching from one thread/todo to an unrelated one, call `send_to_session` with:
+  - `sessionName: product-ops-agent`
+  - `action: clear`
+- Do **not** clear for same-thread follow-ups.
+
 For dev-agent work:
 
 For **single-repo tasks**: spawn one agent.
@@ -150,10 +162,19 @@ Send the task via `send_to_session` including:
 - Any relevant context (Sentry findings, user requirements, etc.)
 - For multi-repo sequential tasks: results from the previous agent
 
-When routing to `product-ops-agent`, always include:
-- explicit repo name(s) under `~/workspace/`
-- an explicit production time window (with timezone) for log triage
-- any known deployment/change marker (commit SHA, deploy time, incident link)
+When routing to `product-ops-agent`, use a **strict task envelope**. Every message must include:
+- `todo_id`
+- `thread_ref` (Slack `channel` + `thread_ts`, or equivalent source thread identifier)
+- `repos` (explicit repo name(s) under `~/workspace/`)
+- `time_window` (explicit range + timezone; use `n/a` if no prod logs needed)
+- `objective` (single concise statement of what to resolve)
+- `done_when` (clear completion criteria)
+- `deployment_marker` (commit SHA / deploy time / incident link, or `n/a`)
+- `mode` (`follow_up_same_thread` or `new_thread`)
+
+Notes:
+- Do **not** include `request_type`; product and production questions may be mixed in one task.
+- If `mode = new_thread` and active thread/todo differs, clear the subagent context first (`send_to_session` with `action: clear`).
 
 ### 6. Relay progress
 
@@ -174,9 +195,10 @@ When a worker reports completion:
 
 If the user sends follow-up messages while a task is in progress (e.g. "also add X", "actually change the approach"):
 
-1. Forward the new instructions to the currently assigned worker via `send_to_session`, referencing the existing todo ID
-2. If the assigned worker is `product-ops-agent` and the follow-up now requires code changes, escalate by spawning a dev-agent and pass full context
-3. Continue relaying progress in the same user thread
+1. If the follow-up maps to the active `product-ops-agent` thread/todo, process it immediately (queue priority rule)
+2. Forward the instructions to the currently assigned worker via `send_to_session`, referencing the existing todo ID
+3. If the assigned worker is `product-ops-agent` and the follow-up now requires code changes, escalate by spawning a dev-agent and pass full context
+4. Continue relaying progress in the same user thread
 
 ### Escalation
 
