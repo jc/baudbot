@@ -123,7 +123,15 @@ Analyze the request to decide which repo(s) the task involves:
 - Agent infra changes → `baudbot`
 - Some tasks need multiple repos (e.g. "review myapp commits, write a blog post on website")
 
-### 4. Spawn dev agent(s)
+### 4. Route to the right worker
+
+Default routing:
+
+- **Read-only product Q&A / production triage** → route to `product-ops-agent`
+- **Code-change execution (fixes, features, tests, PR/CI loop)** → spawn `dev-agent`
+- **Unclear requests** → route to `product-ops-agent` first, then escalate to dev-agent if code changes are needed
+
+For dev-agent work:
 
 For **single-repo tasks**: spawn one agent.
 
@@ -138,28 +146,37 @@ See [Spawning a Dev Agent](#spawning-a-dev-agent) for the full procedure.
 Send the task via `send_to_session` including:
 - The todo ID
 - Clear description of what to do
+- Target repo(s) and any service/time-window constraints for production triage
 - Any relevant context (Sentry findings, user requirements, etc.)
 - For multi-repo sequential tasks: results from the previous agent
 
+When routing to `product-ops-agent`, always include:
+- explicit repo name(s) under `~/workspace/`
+- an explicit production time window (with timezone) for log triage
+- any known deployment/change marker (commit SHA, deploy time, incident link)
+
 ### 6. Relay progress
 
-When dev-agent reports milestones (PR opened, CI status, preview URL), post updates to the original Slack thread / email.
+When subagents or dev-agent report milestones/findings, post updates to the original Slack thread / email.
 
 ### 7. Close out
 
-When dev-agent reports completion:
-- **Spot-check the PR diff** before reporting success to the user — especially for new code. Use `gh pr diff <number>` or read the changed files. Look for obvious issues: string interpolation in queries, missing auth prefixes, hardcoded values, missing doc updates. Don't take "task complete" at face value for complex tasks.
+When a worker reports completion:
+- If it was a **dev-agent** task, **spot-check the PR diff** before reporting success to the user — especially for new code. Use `gh pr diff <number>` or read the changed files. Look for obvious issues: string interpolation in queries, missing auth prefixes, hardcoded values, missing doc updates. Don't take "task complete" at face value for complex tasks.
 - Update the todo with results, set status to `done`
 - Reply to the **original channel** (Slack → Slack thread, email → email reply, chat → chat)
-- Share PR link and preview URL
-- Clean up the agent (see [Cleanup](#cleanup))
+- Share applicable outputs:
+  - product-ops-agent: summary + evidence + recommended next action
+  - dev-agent: PR link, CI status, preview URL
+- Clean up task-scoped dev-agents/worktrees (see [Cleanup](#cleanup))
 
 ### Routing User Follow-ups
 
 If the user sends follow-up messages while a task is in progress (e.g. "also add X", "actually change the approach"):
 
-1. Forward the new instructions to the dev-agent via `send_to_session`, referencing the existing todo ID
-2. Dev-agent incorporates the feedback into its current work
+1. Forward the new instructions to the currently assigned worker via `send_to_session`, referencing the existing todo ID
+2. If the assigned worker is `product-ops-agent` and the follow-up now requires code changes, escalate by spawning a dev-agent and pass full context
+3. Continue relaying progress in the same user thread
 
 ### Escalation
 
@@ -308,8 +325,9 @@ This removes stale `.sock` files, cleans dead aliases, and restarts the Gateway 
 - [ ] Reconcile autostart subagents with `subagent_manage`:
   1. Call `subagent_manage` with `action: reconcile`
   2. Call `subagent_manage` with `action: status`, `id: sentry-agent`
-  3. If `sentry-agent` is not running, call `subagent_manage` with `action: start`, `id: sentry-agent`
-- [ ] Send role assignment to the `sentry-agent` session
+  3. Call `subagent_manage` with `action: status`, `id: product-ops-agent`
+  4. If either subagent is not running, call `subagent_manage` with `action: start`, `id: <subagent-id>`
+- [ ] Send role assignment to `sentry-agent` and `product-ops-agent` sessions
 - [ ] Clean up any stale dev-agent worktrees/tmux sessions from previous runs
 
 **Note**: Dev agents are NOT started at startup. They are spawned on-demand when tasks arrive.
@@ -329,9 +347,11 @@ Common actions:
 - `start` / `stop` — start or stop a package session by `id`
 - `reconcile` — ensure all installed+enabled+autostart packages are running
 
-Use `subagent_manage` for `sentry-agent` startup and recovery. Do not use raw `tmux new-session` shell commands.
+Use `subagent_manage` for subagent startup and recovery (`sentry-agent`, `product-ops-agent`, and future packages). Do not use raw `tmux new-session` shell commands.
 
-The sentry-agent operates in **on-demand mode** — it does NOT poll. Sentry alerts arrive via the Gateway bridge in real-time and are forwarded by you. The sentry-agent uses `sentry_monitor get <issue_id>` to investigate when asked.
+Subagent operating modes:
+- `sentry-agent` operates in **on-demand mode** — it does NOT poll. Sentry alerts arrive via the Gateway bridge in real-time and are forwarded by you. The sentry-agent uses `sentry_monitor get <issue_id>` to investigate when asked.
+- `product-ops-agent` handles **read-only product Q&A and production triage**. Route investigation requests there first; escalate to dev-agent when code changes are required.
 
 ### Starting the Gateway bridge
 
@@ -360,7 +380,7 @@ Health checks run automatically every ~10 minutes via the `heartbeat.ts` extensi
 If you need to check manually, use `heartbeat trigger` to run all checks immediately.
 
 When the heartbeat reports a failure, take the appropriate action:
-1. **Missing sentry-agent**: Call `subagent_manage` with `action: start`, `id: sentry-agent`, then re-send role assignment.
+1. **Missing subagent** (`sentry-agent`, `product-ops-agent`, etc.): Call `subagent_manage` with `action: start`, `id: <subagent-id>`, then re-send role assignment.
 2. **Orphaned dev-agents**: Kill tmux session and remove worktree.
 3. **Bridge down**: Restart via `startup-pi.sh`, then check `~/.pi/agent/logs/gateway-bridge.log` (fallback: `~/.pi/agent/logs/slack-bridge.log`).
 4. **Stale worktrees**: `git worktree remove --force` + `rmdir` empty parents.

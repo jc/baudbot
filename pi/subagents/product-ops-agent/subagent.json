@@ -1,0 +1,17 @@
+{
+  "id": "product-ops-agent",
+  "name": "Product/Ops Agent",
+  "description": "Product behavior Q&A from code plus production-state triage from logs.",
+  "version": "1.0.0",
+  "session_name": "product-ops-agent",
+  "cwd": "~",
+  "skill_path": "SKILL.md",
+  "model_profile": "cheap_tier",
+  "ready_alias": "product-ops-agent",
+  "ready_timeout_sec": 10,
+  "installed_by_default": true,
+  "enabled_by_default": true,
+  "autostart": true,
+  "startup_message": "Ready for product and production Q&A triage.",
+  "utilities": []
+}
