@@ -83,7 +83,7 @@ function hasReplyLogEntry(replyLogContent, threadTs) {
   return false;
 }
 
-function hasOutboundSendCommand(sessionJsonlContent, threadTs) {
+function hasOutboundBridgeReplyCommand(sessionJsonlContent, threadTs) {
   const escapedThreadTs = threadTs.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const threadTsPattern = new RegExp(`["']thread_ts["']\\s*:\\s*["']${escapedThreadTs}["']`);
 
@@ -108,7 +108,7 @@ function hasOutboundSendCommand(sessionJsonlContent, threadTs) {
       if (item?.name !== "bash") continue;
       const command = typeof item?.arguments?.command === "string" ? item.arguments.command : "";
       if (!command.includes("curl")) continue;
-      if (!command.includes("/send")) continue;
+      if (!command.includes("/send") && !command.includes("/reply")) continue;
       if (!threadTsPattern.test(command)) continue;
       return true;
     }
@@ -470,6 +470,16 @@ describe("heartbeat v2: unanswered mention reply detection", () => {
     assert.equal(hasReplyLogEntry(log, "9999.0000"), false);
   });
 
+  it("matches reply-log entries emitted from both /send and /reply routes", () => {
+    const log = [
+      '{"channel":"C111","thread_ts":"3456.7890","route":"/send","replied_at":"2026-02-27T00:10:00Z"}',
+      '{"channel":"C111","thread_ts":"4567.8901","route":"/reply","replied_at":"2026-02-27T00:11:00Z"}',
+    ].join("\n");
+
+    assert.equal(hasReplyLogEntry(log, "3456.7890"), true);
+    assert.equal(hasReplyLogEntry(log, "4567.8901"), true);
+  });
+
   it("ignores malformed reply-log lines", () => {
     const log = ['{"thread_ts":"1234.5678"}', 'not-json', '{"thread_ts":"2345.6789"}'].join("\n");
     assert.equal(hasReplyLogEntry(log, "2345.6789"), true);
@@ -493,7 +503,28 @@ describe("heartbeat v2: unanswered mention reply detection", () => {
       },
     });
 
-    assert.equal(hasOutboundSendCommand(session, "1234.5678"), true);
+    assert.equal(hasOutboundBridgeReplyCommand(session, "1234.5678"), true);
+  });
+
+  it("detects outbound curl /reply with matching thread_ts", () => {
+    const session = JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "bash",
+            arguments: {
+              command:
+                "curl -s -X POST http://127.0.0.1:7890/reply -H 'Content-Type: application/json' -d '{\"thread_id\":\"thread-1\",\"text\":\"hi\",\"thread_ts\":\"4567.8901\"}'",
+            },
+          },
+        ],
+      },
+    });
+
+    assert.equal(hasOutboundBridgeReplyCommand(session, "4567.8901"), true);
   });
 
   it("does not treat inbound text containing thread_ts as a reply", () => {
@@ -505,7 +536,7 @@ describe("heartbeat v2: unanswered mention reply detection", () => {
       },
     });
 
-    assert.equal(hasOutboundSendCommand(inboundOnly, "1234.5678"), false);
+    assert.equal(hasOutboundBridgeReplyCommand(inboundOnly, "1234.5678"), false);
   });
 });
 

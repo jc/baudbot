@@ -25,7 +25,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { discoverSubagentPackages, readSubagentState, resolveEffectiveState } from "./subagent-registry.ts";
@@ -42,7 +42,12 @@ const TODOS_DIR = join(homedir(), ".pi", "todos");
 const BRIDGE_URL = "http://127.0.0.1:7890/send";
 const BRIDGE_LOG_PRIMARY = join(homedir(), ".pi", "agent", "logs", "gateway-bridge.log");
 const BRIDGE_LOG_LEGACY = join(homedir(), ".pi", "agent", "logs", "slack-bridge.log");
+const REPLY_LOG_PRIMARY = join(homedir(), ".pi", "agent", "slack-reply-log.jsonl");
+const REPLY_LOG_ROTATED = `${REPLY_LOG_PRIMARY}.1`;
+const REPLY_LOG_TAIL_MAX_BYTES = 8 * 1024 * 1024; // Scan last 8 MiB to bound heartbeat I/O.
 const SESSION_DIR = join(homedir(), ".pi", "agent", "sessions");
+const SESSION_SCAN_MAX_FILES_PER_DIR = 10;
+const SESSION_SCAN_MAX_FILES_TOTAL = 30;
 const UNANSWERED_MENTION_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 
 type HeartbeatState = {
@@ -412,18 +417,43 @@ function slackTsToMs(ts: string): number | null {
   return Math.floor(parsed * 1000);
 }
 
+function readRecentFileTail(filePath: string, maxBytes: number): string {
+  const stats = statSync(filePath);
+  if (stats.size <= 0) return "";
+  if (stats.size <= maxBytes) {
+    return readFileSync(filePath, "utf-8");
+  }
+
+  const start = Math.max(0, stats.size - maxBytes);
+  const bytesToRead = stats.size - start;
+  const fd = openSync(filePath, "r");
+  try {
+    const chunk = Buffer.alloc(bytesToRead);
+    readSync(fd, chunk, 0, bytesToRead, start);
+    const decoded = chunk.toString("utf-8");
+
+    // We started mid-file; drop the first partial line before parsing JSONL.
+    const firstNewline = decoded.indexOf("\n");
+    return firstNewline === -1 ? "" : decoded.slice(firstNewline + 1);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function hasRepliedToThread(threadTs: string): boolean {
   // Check multiple sources for evidence of a reply to this thread_ts.
 
-  // 1. Check the reply tracking log (most reliable — written by the agent).
+  // 1. Check the reply tracking logs (most reliable — written by the bridge
+  //    for both /send and /reply outbound paths).
   //    File: ~/.pi/agent/slack-reply-log.jsonl
-  //    Each line: {"thread_ts":"...","replied_at":"..."}
-  const replyLogPath = join(homedir(), ".pi", "agent", "slack-reply-log.jsonl");
-  if (existsSync(replyLogPath)) {
+  //    Rotated fallback: ~/.pi/agent/slack-reply-log.jsonl.1
+  //    Each line: {"thread_ts":"...","replied_at":"...", ...}
+  for (const replyLogPath of [REPLY_LOG_PRIMARY, REPLY_LOG_ROTATED]) {
+    if (!existsSync(replyLogPath)) continue;
+
     try {
-      const content = readFileSync(replyLogPath, "utf-8");
-      const lines = content.split("\n");
-      for (const line of lines) {
+      const content = readRecentFileTail(replyLogPath, REPLY_LOG_TAIL_MAX_BYTES);
+      for (const line of content.split("\n")) {
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
@@ -436,61 +466,77 @@ function hasRepliedToThread(threadTs: string): boolean {
         }
       }
     } catch {
-      // File read error — fall through to other checks
+      // File read error — skip this path and fall through to other checks
     }
   }
 
-  // 2. Check recent control-agent session logs for explicit outbound /send calls.
-  //    Session files are in ~/.pi/agent/sessions/--home-baudbot_agent--/
-  //    and named <timestamp>_<uuid>.jsonl.
-  const controlAgentSessionDir = join(SESSION_DIR, "--home-baudbot_agent--");
-  if (existsSync(controlAgentSessionDir)) {
+  // 2. Fallback for older runs: scan recent assistant bash tool calls for
+  //    explicit outbound /send or /reply calls carrying this exact thread_ts.
+  //
+  //    We scan multiple session directories (not just control-agent) because
+  //    replies may come from delegated sessions depending on runtime wiring.
+  if (existsSync(SESSION_DIR)) {
     const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const threadTsPattern = new RegExp(`["']thread_ts["']\\s*:\\s*["']${escapeRegExp(threadTs)}["']`);
+    let scannedFiles = 0;
 
     try {
-      const sessionFiles = readdirSync(controlAgentSessionDir)
-        .filter((f) => f.endsWith(".jsonl"))
-        .sort()
-        .reverse()
-        .slice(0, 3); // Check last 3 sessions
+      const sessionDirs = readdirSync(SESSION_DIR, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(SESSION_DIR, entry.name));
 
-      for (const file of sessionFiles) {
+      for (const sessionDir of sessionDirs) {
+        if (scannedFiles >= SESSION_SCAN_MAX_FILES_TOTAL) break;
+        let sessionFiles: string[] = [];
         try {
-          const content = readFileSync(join(controlAgentSessionDir, file), "utf-8");
-          const lines = content.split("\n");
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            let parsed: any;
-            try {
-              parsed = JSON.parse(trimmed);
-            } catch {
-              continue;
-            }
-
-            if (parsed?.type !== "message") continue;
-            if (parsed?.message?.role !== "assistant") continue;
-
-            const items = parsed?.message?.content;
-            if (!Array.isArray(items)) continue;
-
-            for (const item of items) {
-              if (item?.type !== "toolCall") continue;
-              if (item?.name !== "bash") continue;
-
-              const command = typeof item?.arguments?.command === "string" ? item.arguments.command : "";
-              if (!command.includes("curl")) continue;
-              if (!command.includes("/send")) continue;
-              if (!threadTsPattern.test(command)) continue;
-
-              return true;
-            }
-          }
+          sessionFiles = readdirSync(sessionDir)
+            .filter((f) => f.endsWith(".jsonl"))
+            .sort()
+            .reverse()
+            .slice(0, SESSION_SCAN_MAX_FILES_PER_DIR);
         } catch {
-          // File read error - skip
+          continue;
+        }
+
+        for (const file of sessionFiles) {
+          if (scannedFiles >= SESSION_SCAN_MAX_FILES_TOTAL) break;
+          scannedFiles += 1;
+          try {
+            const content = readFileSync(join(sessionDir, file), "utf-8");
+            const lines = content.split("\n");
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              let parsed: any;
+              try {
+                parsed = JSON.parse(trimmed);
+              } catch {
+                continue;
+              }
+
+              if (parsed?.type !== "message") continue;
+              if (parsed?.message?.role !== "assistant") continue;
+
+              const items = parsed?.message?.content;
+              if (!Array.isArray(items)) continue;
+
+              for (const item of items) {
+                if (item?.type !== "toolCall") continue;
+                if (item?.name !== "bash") continue;
+
+                const command = typeof item?.arguments?.command === "string" ? item.arguments.command : "";
+                if (!command.includes("curl")) continue;
+                if (!command.includes("/send") && !command.includes("/reply")) continue;
+                if (!threadTsPattern.test(command)) continue;
+
+                return true;
+              }
+            }
+          } catch {
+            // File read error - skip
+          }
         }
       }
     } catch {
