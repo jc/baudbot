@@ -91,6 +91,21 @@ Behavior:
 - If envelope fields are missing or ambiguous, ask control-agent for clarification before deep investigation.
 - A single task may mix product-behavior and production-state questions; do not require a separate request-type field.
 
+## Load Repo Guidance and Repo Skills (Per Task)
+
+Before investigating each repo listed in `repos`, load local guidance and skills from that repo:
+
+1. Set `REPO_PATH=~/workspace/<repo>`
+2. Read project guidance in this order:
+   - `AGENTS.md` (if present)
+   - otherwise `CODEX.md` (if present): follow its "Always Load" rules first, then relevant "Load By Context" rules
+   - otherwise `CLAUDE.md`
+3. If present, also read `.pi/agent/instructions.md` in that repo
+4. Load repo-specific investigation skills by checking `.agents/skills/` and reading relevant `SKILL.md` files
+5. Prefer repository-provided investigation tooling/workflows from those skills (for example, Mezmo log tooling) before ad-hoc commands
+
+If required repo guidance/skills cannot be loaded, report that limitation to control-agent before concluding investigation.
+
 ## Keep Codebase Fresh Before Code Answers
 
 Before answering a code question for a repo under `~/workspace/<repo>`:

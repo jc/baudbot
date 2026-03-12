@@ -175,6 +175,7 @@ When routing to `product-ops-agent`, use a **strict task envelope**. Every messa
 Notes:
 - Do **not** include `request_type`; product and production questions may be mixed in one task.
 - If `mode = new_thread` and active thread/todo differs, clear the subagent context first (`send_to_session` with `action: clear`).
+- Explicitly instruct `product-ops-agent` to load repo guidance (`AGENTS.md`/`CODEX.md`) and relevant `.agents/skills/` before investigation.
 
 ### 6. Relay progress
 
