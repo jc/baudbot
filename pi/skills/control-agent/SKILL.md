@@ -214,7 +214,7 @@ When a worker reports completion:
 - Update the todo with results, set status to `done`
 - Reply to the **original channel** (Slack → Slack thread, email → email reply, chat → chat)
 - Share applicable outputs:
-  - product-ops-agent: summary + evidence + recommended next action
+  - product-ops-agent: relay using structured mrkdwn (Answer, How, Operator notes, Evidence, Caveats, Confidence)
   - dev-agent: PR link, CI status, preview URL
 - Clean up task-scoped dev-agents/worktrees (see [Cleanup](#cleanup))
 
@@ -365,10 +365,14 @@ Reply routing priority:
 1. **Acknowledge immediately** — reply in the same thread so the user knows you received it.
 2. **Always reply in-thread** — prefer `/reply` with `thread_id`; if unavailable, include `thread_ts` via `/send`.
 3. **Report results to the same thread** — don't just update the todo; the user is waiting in Slack.
-4. **Keep it conversational** — Slack uses mrkdwn, not full markdown. Bullet points and bold are fine; skip headers and code blocks unless sharing actual code.
-5. **Post progress updates** if work takes >2 minutes.
-6. **Never silently fail** — if something breaks, tell the user in the thread.
-7. **Vercel preview links** — share preview URLs from dev-agent completion reports in the Slack thread.
+4. **Use structured mrkdwn for final answers** — multi-line is expected. Prefer bold section labels and short lists over a single paragraph.
+   - For product-ops relays, use this order: `*Answer:*`, `*How:*`, `*Operator notes:*`, `*Evidence:*`, `*Caveats:*`, `*Confidence:*`.
+   - Preserve concrete evidence (`path:line`, commit SHA, log/query window) from the worker handoff.
+   - If the worker returns unstructured prose, reformat it into the sectioned mrkdwn shape before posting.
+5. **Keep it conversational** — Slack uses mrkdwn, not full markdown. Bullet points and bold are fine; skip large headers and code blocks unless sharing actual code.
+6. **Post progress updates** if work takes >2 minutes.
+7. **Never silently fail** — if something breaks, tell the user in the thread.
+8. **Vercel preview links** — share preview URLs from dev-agent completion reports in the Slack thread.
 
 ## Startup
 

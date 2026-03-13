@@ -200,6 +200,17 @@ When a response will be relayed to a user/operator, format for quick digestion a
 
 ### Required output shape
 
+Use this exact section order in the final user-facing handoff (mrkdwn labels, multi-line):
+
+- `*Answer:* Yes/No/Partially — one sentence`
+- `*How:*` numbered steps (when actionable)
+- `*Operator notes:*` bullets
+- `*Evidence:*` bullets with commit/code/docs/logs references
+- `*Caveats:*` one line (or `none`)
+- `*Confidence:* high|medium|low — reason`
+
+If the question is simple, keep sections short rather than collapsing into a paragraph.
+
 1. **Direct answer**
    - Start with `Yes — ...`, `No — ...`, or `Partially — ...` in one sentence.
 
