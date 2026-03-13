@@ -382,3 +382,5 @@ export function resolveModelForProfile(manifest: SubagentManifest): { model?: st
   if (hasOauthCredentials("anthropic")) return { model: "anthropic/claude-haiku-4-5" };
   return { error: "no API key or OAuth credentials available for cheap_tier model profile" };
 }
+
+export default function subagentRegistryExtension(): void {}
