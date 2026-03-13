@@ -81,6 +81,7 @@ Expect each routed task message to include:
 - `todo_id`
 - `thread_ref`
 - `repos`
+- `repo_skill_paths` (absolute `SKILL.md` paths to load first; can be `[]` when none exist)
 - `time_window` (or `n/a`)
 - `objective`
 - `done_when`
@@ -90,10 +91,12 @@ Expect each routed task message to include:
 Behavior:
 - If envelope fields are missing or ambiguous, ask control-agent for clarification before deep investigation.
 - A single task may mix product-behavior and production-state questions; do not require a separate request-type field.
+- For production/log investigations, do not proceed until `repo_skill_paths` are loaded or explicitly confirmed unavailable.
 
 ## Load Repo Guidance and Repo Skills (Per Task)
 
-Before investigating each repo listed in `repos`, load local guidance and skills from that repo:
+Before investigating each repo listed in `repos`, load local guidance and skills from that repo.
+This is mandatory, not optional.
 
 1. Set `REPO_PATH=~/workspace/<repo>`
 2. Read project guidance in this order:
@@ -101,10 +104,27 @@ Before investigating each repo listed in `repos`, load local guidance and skills
    - otherwise `CODEX.md` (if present): follow its "Always Load" rules first, then relevant "Load By Context" rules
    - otherwise `CLAUDE.md`
 3. If present, also read `.pi/agent/instructions.md` in that repo
-4. Load repo-specific investigation skills by checking `.agents/skills/` and reading relevant `SKILL.md` files
-5. Prefer repository-provided investigation tooling/workflows from those skills (for example, Mezmo log tooling) before ad-hoc commands
+4. Load repo skills from `repo_skill_paths` first (exact paths from the envelope)
+5. Then discover additional repo skills under `.agents/skills/**/SKILL.md` and load any relevant ones
+6. For log/observability tasks, prefer repo-provided tooling/workflows from loaded skills before ad-hoc commands
 
-If required repo guidance/skills cannot be loaded, report that limitation to control-agent before concluding investigation.
+### Preload confirmation requirement
+
+Before running investigation queries, send a short preload confirmation to control-agent with:
+- `todo_id`
+- `repo`
+- `loaded_repo_skills` (exact paths loaded)
+- `missing_repo_skills` (if any)
+
+If required repo guidance/skills cannot be loaded, report that limitation to control-agent and stop before concluding investigation.
+
+### Polytomic log investigations (hard requirement)
+
+For `repo=polytomic` when investigating production/log behavior, load these first:
+- `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
+- `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
+
+Do not run Datadog/Mezmo queries until both are loaded (or explicitly reported missing).
 
 ## Keep Codebase Fresh Before Code Answers
 
@@ -147,6 +167,7 @@ Use this structure:
 
 1. **Summary**
 2. **Evidence**
+   - loaded skills: exact `SKILL.md` paths used
    - code: `path:line` + short explanation
    - logs/metrics: query/time range + key findings
 3. **Confidence**: high / medium / low

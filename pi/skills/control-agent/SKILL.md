@@ -159,6 +159,7 @@ Send the task via `send_to_session` including:
 - The todo ID
 - Clear description of what to do
 - Target repo(s) and any service/time-window constraints for production triage
+- Explicit repo skill paths to load first for log/observability investigations
 - Any relevant context (Sentry findings, user requirements, etc.)
 - For multi-repo sequential tasks: results from the previous agent
 
@@ -166,6 +167,7 @@ When routing to `product-ops-agent`, use a **strict task envelope**. Every messa
 - `todo_id`
 - `thread_ref` (Slack `channel` + `thread_ts`, or equivalent source thread identifier)
 - `repos` (explicit repo name(s) under `~/workspace/`)
+- `repo_skill_paths` (absolute `SKILL.md` paths that must be loaded before investigation; `[]` allowed only when no repo-specific skills exist)
 - `time_window` (explicit range + timezone; use `n/a` if no prod logs needed)
 - `objective` (single concise statement of what to resolve)
 - `done_when` (clear completion criteria)
@@ -175,7 +177,20 @@ When routing to `product-ops-agent`, use a **strict task envelope**. Every messa
 Notes:
 - Do **not** include `request_type`; product and production questions may be mixed in one task.
 - If `mode = new_thread` and active thread/todo differs, clear the subagent context first (`send_to_session` with `action: clear`).
-- Explicitly instruct `product-ops-agent` to load repo guidance (`AGENTS.md`/`CODEX.md`) and relevant `.agents/skills/` before investigation.
+- Require `product-ops-agent` to acknowledge which guidance/skills were loaded **before** any conclusions.
+- For production/log questions, include explicit `repo_skill_paths`; generic "load repo skills" instructions are insufficient.
+- For `polytomic` log investigations, always include both:
+  - `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
+  - `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
+
+**Repo-skill preload handshake (required for log triage):**
+1. In the task envelope, provide `repo_skill_paths` with absolute paths.
+2. Ask `product-ops-agent` to respond first with `loaded_repo_skills` (exact paths loaded).
+3. Only after preload confirmation should it run Datadog/Mezmo/log queries and report findings.
+
+For `polytomic` production/log tasks, always set `repo_skill_paths` to:
+- `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
+- `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
 
 ### 6. Relay progress
 
