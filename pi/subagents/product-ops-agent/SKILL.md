@@ -87,9 +87,11 @@ Expect each routed task message to include:
 - `done_when`
 - `deployment_marker` (or `n/a`)
 - `mode` (`follow_up_same_thread` or `new_thread`)
+- `response_mode` (`inline_wait` or `async_callback`)
 
 Behavior:
 - If envelope fields are missing or ambiguous, ask control-agent for clarification before deep investigation.
+- `response_mode` is required. If it's missing, ask for it before continuing.
 - A single task may mix product-behavior and production-state questions; do not require a separate request-type field.
 - For production/log investigations, do not proceed until `repo_skill_paths` are loaded or explicitly confirmed unavailable.
 
@@ -160,6 +162,17 @@ Escalate through control-agent if any of these are true:
 - user asks for a code change/fix
 - root cause likely requires patch/test/PR
 - investigation requires branch/worktree-based reproduction
+
+## Return Handoff Contract (critical)
+
+For every task received from control-agent, you MUST return results according to `response_mode`.
+
+- `response_mode: inline_wait` → return your full report in the normal assistant response for that turn (control-agent is waiting with `wait_until: turn_end`).
+- `response_mode: async_callback` → send your report back via `send_to_session`.
+  - Use `sender_info` from the incoming message when present; otherwise target `sessionName: control-agent`.
+- Send preload confirmation first (loaded/missing repo skills) before running deep investigation.
+- Send a final handoff when the objective is complete. Producing an answer locally without returning it is a protocol failure.
+- If blocked, uncertain, or waiting on tooling, send a blocker/progress handoff instead of going silent.
 
 ## Reporting Format (to control-agent)
 

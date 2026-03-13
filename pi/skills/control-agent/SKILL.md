@@ -173,10 +173,12 @@ When routing to `product-ops-agent`, use a **strict task envelope**. Every messa
 - `done_when` (clear completion criteria)
 - `deployment_marker` (commit SHA / deploy time / incident link, or `n/a`)
 - `mode` (`follow_up_same_thread` or `new_thread`)
+- `response_mode` (`inline_wait` when using `wait_until: turn_end`, or `async_callback` when using fire-and-forget)
 
 Notes:
 - Do **not** include `request_type`; product and production questions may be mixed in one task.
 - If `mode = new_thread` and active thread/todo differs, clear the subagent context first (`send_to_session` with `action: clear`).
+- Set `response_mode` explicitly on every task (`inline_wait` vs `async_callback`) so handoff expectations are unambiguous.
 - Require `product-ops-agent` to acknowledge which guidance/skills were loaded **before** any conclusions.
 - For production/log questions, include explicit `repo_skill_paths`; generic "load repo skills" instructions are insufficient.
 - For `polytomic` log investigations, always include both:
@@ -191,6 +193,15 @@ Notes:
 For `polytomic` production/log tasks, always set `repo_skill_paths` to:
 - `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
 - `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
+
+**Delegation reliability contract (required):**
+- For `product-ops-agent` tasks, default to `send_to_session` with `wait_until: turn_end` for the primary request so you always capture a bounded response path.
+- If you intentionally use fire-and-forget delivery (no `wait_until`), explicitly require `product-ops-agent` to send a final handoff to you via `send_to_session` using `sender_info` (do not assume local completion implies relay).
+- If `wait_until: turn_end` times out or errors, recover immediately:
+  1. `send_to_session` with `action: get_summary` to capture current progress.
+  2. Re-send a focused follow-up requiring final handoff.
+  3. Post a status update in the user thread ("still investigating") and keep the todo active.
+- Never leave a task in `in-progress` without either a user-visible progress update or a final relay.
 
 ### 6. Relay progress
 

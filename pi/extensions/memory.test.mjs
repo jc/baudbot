@@ -267,6 +267,10 @@ describe("memory: skill file integration", () => {
     path.join(REPO_ROOT, "pi/skills/sentry-agent/SKILL.md"),
     "utf-8"
   );
+  const productOpsSkill = fs.readFileSync(
+    path.join(REPO_ROOT, "pi/subagents/product-ops-agent/SKILL.md"),
+    "utf-8"
+  );
 
   it("control-agent SKILL.md has Memory section", () => {
     assert.ok(controlSkill.includes("## Memory"), "should have Memory section");
@@ -375,6 +379,34 @@ describe("memory: skill file integration", () => {
     assert.ok(
       sentrySkill.includes("Never store secrets"),
       "should warn against storing secrets"
+    );
+  });
+
+  it("control-agent SKILL.md defines response_mode for product-ops envelopes", () => {
+    assert.ok(
+      controlSkill.includes("response_mode") && controlSkill.includes("inline_wait") && controlSkill.includes("async_callback"),
+      "control-agent runbook should define explicit response_mode handoff"
+    );
+  });
+
+  it("control-agent SKILL.md has delegation reliability contract", () => {
+    assert.ok(
+      controlSkill.includes("Delegation reliability contract"),
+      "control-agent runbook should include delegation reliability guidance"
+    );
+  });
+
+  it("product-ops-agent SKILL.md requires response_mode handoff", () => {
+    assert.ok(
+      productOpsSkill.includes("response_mode") && productOpsSkill.includes("inline_wait") && productOpsSkill.includes("async_callback"),
+      "product-ops-agent should handle both inline_wait and async_callback"
+    );
+  });
+
+  it("product-ops-agent SKILL.md enforces return handoff contract", () => {
+    assert.ok(
+      productOpsSkill.includes("Return Handoff Contract") && productOpsSkill.includes("protocol failure"),
+      "product-ops-agent should explicitly forbid local-only completion"
     );
   });
 });
