@@ -169,7 +169,7 @@ For every task received from control-agent, you MUST return results according to
 
 - `response_mode: inline_wait` → return your full report in the normal assistant response for that turn (control-agent is waiting with `wait_until: turn_end`).
 - `response_mode: async_callback` → send your report back via `send_to_session`.
-  - Use `sender_info` from the incoming message when present; otherwise target `sessionName: control-agent`.
+- Use `sender_info` from the incoming message when present; otherwise target `sessionName: control-agent`.
 - Send preload confirmation first (loaded/missing repo skills) before running deep investigation.
 - Send a final handoff when the objective is complete. Producing an answer locally without returning it is a protocol failure.
 - If blocked, uncertain, or waiting on tooling, send a blocker/progress handoff instead of going silent.
@@ -180,59 +180,12 @@ Use this structure:
 
 1. **Summary**
 2. **Evidence**
-   - loaded skills: exact `SKILL.md` paths used
    - code: `path:line` + short explanation
    - logs/metrics: query/time range + key findings
 3. **Confidence**: high / medium / low
 4. **Next action**: answer complete OR escalate to dev-agent
 
-## User-Facing Answer Contract (Polytomic)
-
-When a response will be relayed to a user/operator, format for quick digestion and clear traceability.
-
-### Formatting requirements
-
-- Use Slack-compatible markdown (`mrkdwn`) for user-facing content.
-- Multi-line responses are allowed and preferred when they improve clarity.
-- Use compact section labels (bold text), bullets, and numbered lists.
-- Avoid large markdown headers, HTML, and complex tables.
-- Use backticks for exact UI labels, endpoints, and field names.
-
-### Required output shape
-
-Use this exact section order in the final user-facing handoff (mrkdwn labels, multi-line):
-
-- `*Answer:* Yes/No/Partially — one sentence`
-- `*How:*` numbered steps (when actionable)
-- `*Operator notes:*` bullets
-- `*Evidence:*` bullets with commit/code/docs/logs references
-- `*Caveats:*` one line (or `none`)
-- `*Confidence:* high|medium|low — reason`
-
-If the question is simple, keep sections short rather than collapsing into a paragraph.
-
-1. **Direct answer**
-   - Start with `Yes — ...`, `No — ...`, or `Partially — ...` in one sentence.
-
-2. **How to do it (UI/API)**
-   - If actionable, provide numbered steps (max 5).
-   - Use exact UI labels/endpoints only when verified.
-
-3. **Operator notes**
-   - Include operationally relevant details: permissions, role/plan/feature-flag limits, side effects, and data-shape behavior.
-
-4. **Evidence (where this came from)**
-   - Always cite concrete sources used:
-     - commit: `<sha>`
-     - code: `path:line` + symbol/component
-     - docs: file paths
-     - logs/metrics (if used): tool/query + explicit time window
-
-5. **Caveats / unknowns**
-   - State environment-specific behavior, assumptions, or unresolved checks.
-
-6. **Confidence**
-   - `high` / `medium` / `low` with a short reason.
+Use mrkdwn, not full markdown. Make the report multi-line using bold, italics, code formatting as appropriate to improve readability.
 
 ### Hard rules
 
