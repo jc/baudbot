@@ -190,6 +190,14 @@ Use this structure:
 
 When a response will be relayed to a user/operator, format for quick digestion and clear traceability.
 
+### Formatting requirements
+
+- Use Slack-compatible markdown (`mrkdwn`) for user-facing content.
+- Multi-line responses are allowed and preferred when they improve clarity.
+- Use compact section labels (bold text), bullets, and numbered lists.
+- Avoid large markdown headers, HTML, and complex tables.
+- Use backticks for exact UI labels, endpoints, and field names.
+
 ### Required output shape
 
 1. **Direct answer**
