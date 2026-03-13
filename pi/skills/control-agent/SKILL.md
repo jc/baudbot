@@ -211,16 +211,21 @@ If dev-agent reports repeated failures (e.g. CI failing after 3+ fix attempts, o
 
 ## Spawning a Dev Agent
 
-Pick the model based on which API key is available (check env vars in this order):
+Pick the model in this order:
+
+1. API key env vars (`.config/.env`)
+2. OAuth credentials (`~/.pi/agent/auth.json`)
 
 **Coding / orchestration (top-tier):**
 
-| API key | Model |
-|---------|-------|
-| `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-6` |
-| `OPENAI_API_KEY` | `openai/gpt-5.2-codex` |
-| `GEMINI_API_KEY` | `google/gemini-3-pro-preview` |
-| `OPENCODE_ZEN_API_KEY` | `opencode-zen/claude-opus-4-6` |
+| Credential source | Selector | Model |
+|-------------------|----------|-------|
+| API key env | `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-6` |
+| API key env | `OPENAI_API_KEY` | `openai/gpt-5.3-codex` |
+| API key env | `GEMINI_API_KEY` | `google/gemini-3-pro-preview` |
+| API key env | `OPENCODE_ZEN_API_KEY` | `opencode-zen/claude-opus-4-6` |
+| OAuth (`auth.json`) | provider `openai-codex` | `openai-codex/gpt-5.1-codex-mini` |
+| OAuth (`auth.json`) | provider `anthropic` | `anthropic/claude-opus-4-6` |
 
 Full procedure for spinning up a task-scoped dev agent:
 
@@ -253,7 +258,7 @@ git worktree add ~/workspace/worktrees/$BRANCH -b $BRANCH origin/main
 - `send_to_session` is a tool call, not a shell command.
 - `pi session spawn` and `--name` are not valid in this runtime.
 
-**Model note**: Dev agents use the top-tier model from the table above. For cheaper tasks (e.g. read-only analysis), use the cheap model from the sentry-agent table instead.
+**Model note**: Dev agents use the top-tier model from the table above. For cheaper tasks (e.g. read-only analysis), use the cheap model from the sentry-agent table instead. Cheap-tier resolution also checks API keys first, then OAuth; with `openai-codex` OAuth it resolves to `openai-codex/gpt-5.1-codex-mini`.
 
 ## Cleanup
 

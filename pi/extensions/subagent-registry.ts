@@ -338,6 +338,24 @@ export function resolveEffectiveState(pkg: SubagentPackage, state: SubagentState
   };
 }
 
+function hasOauthCredentials(providerId: string): boolean {
+  const authPath = join(homedir(), ".pi", "agent", "auth.json");
+  if (!existsSync(authPath)) return false;
+
+  try {
+    const parsed = JSON.parse(readFileSync(authPath, "utf-8")) as unknown;
+    if (!isRecord(parsed)) return false;
+
+    const providerEntry = parsed[providerId];
+    if (!isRecord(providerEntry)) return false;
+
+    const providerType = providerEntry.type;
+    return providerType === undefined || providerType === "oauth";
+  } catch {
+    return false;
+  }
+}
+
 export function resolveModelForProfile(manifest: SubagentManifest): { model?: string; error?: string } {
   if (manifest.model_profile === "explicit") {
     if (!manifest.model) {
@@ -348,15 +366,19 @@ export function resolveModelForProfile(manifest: SubagentManifest): { model?: st
 
   if (manifest.model_profile === "top_tier") {
     if (process.env.ANTHROPIC_API_KEY) return { model: "anthropic/claude-opus-4-6" };
-    if (process.env.OPENAI_API_KEY) return { model: "openai/gpt-5.2-codex" };
+    if (process.env.OPENAI_API_KEY) return { model: "openai/gpt-5.3-codex" };
     if (process.env.GEMINI_API_KEY) return { model: "google/gemini-3-pro-preview" };
     if (process.env.OPENCODE_ZEN_API_KEY) return { model: "opencode-zen/claude-opus-4-6" };
-    return { error: "no API key available for top_tier model profile" };
+    if (hasOauthCredentials("openai-codex")) return { model: "openai-codex/gpt-5.1-codex-mini" };
+    if (hasOauthCredentials("anthropic")) return { model: "anthropic/claude-opus-4-6" };
+    return { error: "no API key or OAuth credentials available for top_tier model profile" };
   }
 
   if (process.env.ANTHROPIC_API_KEY) return { model: "anthropic/claude-haiku-4-5" };
   if (process.env.OPENAI_API_KEY) return { model: "openai/gpt-5-mini" };
   if (process.env.GEMINI_API_KEY) return { model: "google/gemini-3-flash-preview" };
   if (process.env.OPENCODE_ZEN_API_KEY) return { model: "opencode-zen/claude-haiku-4-5" };
-  return { error: "no API key available for cheap_tier model profile" };
+  if (hasOauthCredentials("openai-codex")) return { model: "openai-codex/gpt-5.1-codex-mini" };
+  if (hasOauthCredentials("anthropic")) return { model: "anthropic/claude-haiku-4-5" };
+  return { error: "no API key or OAuth credentials available for cheap_tier model profile" };
 }

@@ -86,6 +86,7 @@ EOF_SUDO
 #!/bin/bash
 set -euo pipefail
 STATE_FILE="${BAUDBOT_TEST_TMUX_FILE:?missing BAUDBOT_TEST_TMUX_FILE}"
+CMD_LOG_FILE="${BAUDBOT_TEST_TMUX_CMD_LOG:-}"
 mkdir -p "$(dirname "$STATE_FILE")"
 touch "$STATE_FILE"
 
@@ -105,6 +106,11 @@ extract_flag_value() {
 
 cmd="${1:-}"
 shift || true
+
+if [ -n "$CMD_LOG_FILE" ]; then
+  mkdir -p "$(dirname "$CMD_LOG_FILE")"
+  printf '%s %s\n' "$cmd" "$*" >> "$CMD_LOG_FILE"
+fi
 
 case "$cmd" in
   has-session)
@@ -357,6 +363,54 @@ test_start_handles_single_quote_path() {
   )
 }
 
+test_start_uses_openai_codex_oauth_model() {
+  (
+    set -euo pipefail
+    local tmp agent_home fakebin control_dir socket_path alias_path sock_pid real_user output_file tmux_cmd_log auth_json
+    tmp="$(mktemp -d /tmp/baudbot-subagents-test.XXXXXX)"
+    trap 'kill "$sock_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+
+    agent_home="$(setup_fixture "$tmp")"
+    fakebin="$tmp/fakebin"
+    real_user="$(/usr/bin/id -un)"
+    control_dir="$agent_home/.pi/session-control"
+    socket_path="$control_dir/sentry-agent.sock"
+    alias_path="$control_dir/sentry-agent.alias"
+    output_file="$tmp/start.out"
+    tmux_cmd_log="$tmp/tmux-command.log"
+    auth_json="$agent_home/.pi/agent/auth.json"
+
+    # Force OAuth-only resolution path (no API key in env file)
+    : > "$agent_home/.config/.env"
+    cat > "$auth_json" <<'JSON'
+{
+  "openai-codex": {
+    "type": "oauth",
+    "access": "token"
+  }
+}
+JSON
+
+    sock_pid="$(start_unix_socket "$socket_path")"
+    for _i in $(seq 1 20); do
+      [ -S "$socket_path" ] && break
+      sleep 0.1
+    done
+    ln -sf "$(basename "$socket_path")" "$alias_path"
+
+    export PATH="$fakebin:$PATH"
+    export BAUDBOT_TEST_ID_U="0"
+    export BAUDBOT_AGENT_USER="$real_user"
+    export BAUDBOT_AGENT_HOME="$agent_home"
+    export BAUDBOT_TEST_TMUX_FILE="$tmp/tmux-sessions"
+    export BAUDBOT_TEST_TMUX_CMD_LOG="$tmux_cmd_log"
+
+    bash "$SCRIPT" start sentry-agent >"$output_file" 2>&1
+    grep -q "started sentry-agent" "$output_file"
+    grep -q "openai-codex/gpt-5.1-codex-mini" "$tmux_cmd_log"
+  )
+}
+
 echo "=== subagents cli tests ==="
 echo ""
 
@@ -365,6 +419,7 @@ run_test "list/install/enable/autostart state" test_list_and_state_toggles
 run_test "reconcile/status/stop lifecycle" test_reconcile_status_stop
 run_test "start rejects injected cwd payload" test_start_rejects_injected_cwd
 run_test "start handles single-quote cwd path" test_start_handles_single_quote_path
+run_test "start uses openai-codex oauth model" test_start_uses_openai_codex_oauth_model
 
 echo ""
 echo "=== $PASSED/$TOTAL passed, $FAILED failed ==="

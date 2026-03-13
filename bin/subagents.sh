@@ -9,6 +9,7 @@ SUBAGENT_DIR="${BAUDBOT_SUBAGENT_DIR:-$AGENT_HOME/.pi/agent/subagents}"
 STATE_FILE="${BAUDBOT_SUBAGENT_STATE_FILE:-$AGENT_HOME/.pi/agent/subagents-state.json}"
 CONTROL_DIR="${BAUDBOT_SUBAGENT_CONTROL_DIR:-$AGENT_HOME/.pi/session-control}"
 ENV_FILE="${BAUDBOT_SUBAGENT_ENV_FILE:-$AGENT_HOME/.config/.env}"
+AUTH_JSON_FILE="${BAUDBOT_SUBAGENT_AUTH_FILE:-$AGENT_HOME/.pi/agent/auth.json}"
 
 usage() {
   cat <<USAGE
@@ -167,6 +168,12 @@ resolve_model() {
     grep -Eq "^${key}=[^[:space:]].*$" "$ENV_FILE" 2>/dev/null
   }
 
+  has_oauth_provider() {
+    local provider="$1"
+    [ -f "$AUTH_JSON_FILE" ] || return 1
+    jq -e --arg p "$provider" '.[$p] and ((.[$p].type // "oauth") == "oauth")' "$AUTH_JSON_FILE" >/dev/null 2>&1
+  }
+
   if [ "$profile" = "explicit" ]; then
     if [ -n "$explicit_model" ]; then
       echo "$explicit_model"
@@ -177,9 +184,11 @@ resolve_model() {
 
   if [ "$profile" = "top_tier" ]; then
     if has_key "ANTHROPIC_API_KEY"; then echo "anthropic/claude-opus-4-6"; return 0; fi
-    if has_key "OPENAI_API_KEY"; then echo "openai/gpt-5.2-codex"; return 0; fi
+    if has_key "OPENAI_API_KEY"; then echo "openai/gpt-5.3-codex"; return 0; fi
     if has_key "GEMINI_API_KEY"; then echo "google/gemini-3-pro-preview"; return 0; fi
     if has_key "OPENCODE_ZEN_API_KEY"; then echo "opencode-zen/claude-opus-4-6"; return 0; fi
+    if has_oauth_provider "openai-codex"; then echo "openai-codex/gpt-5.1-codex-mini"; return 0; fi
+    if has_oauth_provider "anthropic"; then echo "anthropic/claude-opus-4-6"; return 0; fi
     return 1
   fi
 
@@ -187,6 +196,8 @@ resolve_model() {
   if has_key "OPENAI_API_KEY"; then echo "openai/gpt-5-mini"; return 0; fi
   if has_key "GEMINI_API_KEY"; then echo "google/gemini-3-flash-preview"; return 0; fi
   if has_key "OPENCODE_ZEN_API_KEY"; then echo "opencode-zen/claude-haiku-4-5"; return 0; fi
+  if has_oauth_provider "openai-codex"; then echo "openai-codex/gpt-5.1-codex-mini"; return 0; fi
+  if has_oauth_provider "anthropic"; then echo "anthropic/claude-haiku-4-5"; return 0; fi
   return 1
 }
 

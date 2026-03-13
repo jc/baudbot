@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import subagentManagerExtension from "./subagent-manager.ts";
 
@@ -13,6 +12,7 @@ const ORIGINAL_SUBAGENTS_DIR = process.env[SUBAGENTS_DIR_ENV];
 const ORIGINAL_SUBAGENTS_STATE = process.env[SUBAGENTS_STATE_FILE_ENV];
 const ORIGINAL_CONTROL_DIR = process.env[SESSION_CONTROL_DIR_ENV];
 const ORIGINAL_OPENAI_KEY = process.env.OPENAI_API_KEY;
+const ORIGINAL_HOME = process.env.HOME;
 
 function createHarness(execImpl) {
   let registered = null;
@@ -79,10 +79,13 @@ describe("subagent_manage extension tool", () => {
 
     if (ORIGINAL_OPENAI_KEY === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = ORIGINAL_OPENAI_KEY;
+
+    if (ORIGINAL_HOME === undefined) delete process.env.HOME;
+    else process.env.HOME = ORIGINAL_HOME;
   });
 
   it("lists discovered subagent packages", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "subagent-manager-test-"));
+    const root = mkdtempSync("/tmp/subagent-manager-test-");
     tempDirs.push(root);
 
     const subagentsDir = path.join(root, "subagents");
@@ -118,7 +121,7 @@ describe("subagent_manage extension tool", () => {
   });
 
   it("enable action writes state overrides", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "subagent-manager-test-"));
+    const root = mkdtempSync("/tmp/subagent-manager-test-");
     tempDirs.push(root);
 
     const subagentsDir = path.join(root, "subagents");
@@ -152,7 +155,7 @@ describe("subagent_manage extension tool", () => {
   });
 
   it("install action reenables and clears autostart to match shell behavior", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "subagent-manager-test-"));
+    const root = mkdtempSync("/tmp/subagent-manager-test-");
     tempDirs.push(root);
 
     const subagentsDir = path.join(root, "subagents");
@@ -198,7 +201,7 @@ describe("subagent_manage extension tool", () => {
   });
 
   it("reconcile starts missing autostart-enabled subagent", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), "subagent-manager-test-"));
+    const root = mkdtempSync("/tmp/subagent-manager-test-");
     tempDirs.push(root);
 
     const subagentsDir = path.join(root, "subagents");
@@ -252,5 +255,72 @@ describe("subagent_manage extension tool", () => {
     expect(result.isError).not.toBe(true);
     expect(result.details.started).toHaveLength(1);
     expect(result.details.started[0].id).toBe("sentry-agent");
+  });
+
+  it("reconcile resolves cheap tier from openai-codex oauth", async () => {
+    const root = mkdtempSync("/tmp/subagent-manager-test-");
+    tempDirs.push(root);
+
+    const subagentsDir = path.join(root, "subagents");
+    const statePath = path.join(root, "subagents-state.json");
+    const controlDir = path.join(root, "session-control");
+    const authDir = path.join(root, ".pi", "agent");
+    mkdirSync(subagentsDir, { recursive: true });
+    mkdirSync(controlDir, { recursive: true });
+    mkdirSync(authDir, { recursive: true });
+
+    writeManifest(subagentsDir, {
+      id: "sentry-agent",
+      name: "Sentry Agent",
+      description: "Incident triage agent",
+      session_name: "sentry-agent",
+      model_profile: "cheap_tier",
+      autostart: true,
+      ready_timeout_sec: 3,
+    });
+
+    writeFileSync(
+      path.join(authDir, "auth.json"),
+      JSON.stringify({ "openai-codex": { type: "oauth", access: "token" } }, null, 2) + "\n",
+      "utf-8",
+    );
+
+    process.env[SUBAGENTS_DIR_ENV] = subagentsDir;
+    process.env[SUBAGENTS_STATE_FILE_ENV] = statePath;
+    process.env[SESSION_CONTROL_DIR_ENV] = controlDir;
+    process.env.HOME = root;
+    delete process.env.OPENAI_API_KEY;
+
+    const socketPath = path.join(controlDir, "sentry-agent.sock");
+    const aliasPath = path.join(controlDir, "sentry-agent.alias");
+
+    const execSpy = vi.fn(async (command, args) => {
+      if (command === "tmux" && args[0] === "has-session") {
+        return { stdout: "", stderr: "", code: 1, killed: false };
+      }
+
+      if (command === "tmux" && args[0] === "new-session") {
+        expect(args[4]).toContain("--model 'openai-codex/gpt-5.1-codex-mini'");
+        const server = await startUnixSocketServer(socketPath);
+        servers.push(server);
+        symlinkSync(path.basename(socketPath), aliasPath);
+        return { stdout: "", stderr: "", code: 0, killed: false };
+      }
+
+      return { stdout: "", stderr: "", code: 0, killed: false };
+    });
+
+    const tool = createHarness(execSpy);
+    const result = await tool.execute(
+      "tool-call",
+      { action: "reconcile" },
+      undefined,
+      undefined,
+      {},
+    );
+
+    expect(result.isError).not.toBe(true);
+    expect(result.details.started).toHaveLength(1);
+    expect(result.details.started[0].model).toBe("openai-codex/gpt-5.1-codex-mini");
   });
 });
