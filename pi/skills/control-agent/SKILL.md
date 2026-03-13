@@ -109,7 +109,7 @@ When a request comes in (email, Slack, or chat):
 todo create — status: in-progress, tag with source (slack, email, chat)
 ```
 
-Include the originating channel in the todo body (Slack channel + `thread_ts`, email sender/message-id) so you know where to reply.
+Include the originating thread reference in the todo body (Slack `channel` + `thread_ts` + bridge `thread_id` when present, email sender/message-id) so you know where to reply.
 
 ### 2. Acknowledge immediately
 
@@ -285,11 +285,21 @@ If the agent's worktree has unpushed changes you want to preserve, skip worktree
 
 ### Sending Messages
 
-**Primary — bridge local API** (works in both broker and Socket Mode):
+**Primary for thread replies (including DMs) — `/reply` with `thread_id`:**
+```bash
+curl -s -X POST http://127.0.0.1:7890/reply \
+  -H 'Content-Type: application/json' \
+  -d '{"thread_id":"thread-1","text":"your message"}'
+```
+
+Use `/reply` whenever a bridge thread id is available (`[Bridge-Thread-ID: thread-N]`).
+This is required for DM threads because `/send` validates channel IDs.
+
+**Fallback (when no `thread_id` is available) — `/send`:**
 ```bash
 curl -s -X POST http://127.0.0.1:7890/send \
   -H 'Content-Type: application/json' \
-  -d '{"channel":"CHANNEL_ID","text":"your message","thread_ts":"optional"}'
+  -d '{"channel":"C123...","text":"your message","thread_ts":"optional"}'
 ```
 
 **Add a reaction:**
@@ -313,17 +323,21 @@ Source: Slack
 From: <@UXXXXXXX>
 Channel: <#C07ABCDEF>
 Thread: 1739581234.567890
+[Bridge-Thread-ID: thread-1]
 ---
 the actual user message here
 <<<END_EXTERNAL_UNTRUSTED_CONTENT>>>
 ```
 
-Use the Thread value as `thread_ts` when calling `/send` to reply in the same thread.
+Reply routing priority:
+1. If `[Bridge-Thread-ID: ...]` is present, use `/reply` with `thread_id`.
+2. Otherwise, use `/send` with `channel` + `thread_ts`.
+3. Never use `/send` for DM channels (`D...`) when a `thread_id` exists.
 
 ### Response Guidelines
 
 1. **Acknowledge immediately** — reply in the same thread so the user knows you received it.
-2. **Always reply in-thread** — never post to channel top-level; always include `thread_ts`.
+2. **Always reply in-thread** — prefer `/reply` with `thread_id`; if unavailable, include `thread_ts` via `/send`.
 3. **Report results to the same thread** — don't just update the todo; the user is waiting in Slack.
 4. **Keep it conversational** — Slack uses mrkdwn, not full markdown. Bullet points and bold are fine; skip headers and code blocks unless sharing actual code.
 5. **Post progress updates** if work takes >2 minutes.
