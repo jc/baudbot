@@ -109,7 +109,7 @@ When a request comes in (email, Slack, or chat):
 todo create — status: in-progress, tag with source (slack, email, chat)
 ```
 
-Include the originating channel in the todo body (Slack channel + `thread_ts`, email sender/message-id) so you know where to reply.
+Include the originating thread reference in the todo body (Slack `channel` + `thread_ts` + bridge `thread_id` when present, email sender/message-id) so you know where to reply.
 
 ### 2. Acknowledge immediately
 
@@ -123,7 +123,27 @@ Analyze the request to decide which repo(s) the task involves:
 - Agent infra changes → `baudbot`
 - Some tasks need multiple repos (e.g. "review myapp commits, write a blog post on website")
 
-### 4. Spawn dev agent(s)
+### 4. Route to the right worker
+
+Default routing:
+
+- **Read-only product Q&A / production triage** → route to `product-ops-agent`
+- **Code-change execution (fixes, features, tests, PR/CI loop)** → spawn `dev-agent`
+- **Unclear requests** → route to `product-ops-agent` first, then escalate to dev-agent if code changes are needed
+
+#### product-ops-agent queue policy (single-session)
+
+`product-ops-agent` is treated as a single-worker queue.
+
+- Process only one product-ops task at a time.
+- Queue additional product-ops requests as todos.
+- Priority rule: if any queued item is a follow-up for the **currently active thread/todo**, process that follow-up next before unrelated queued requests.
+- When switching from one thread/todo to an unrelated one, call `send_to_session` with:
+  - `sessionName: product-ops-agent`
+  - `action: clear`
+- Do **not** clear for same-thread follow-ups.
+
+For dev-agent work:
 
 For **single-repo tasks**: spawn one agent.
 
@@ -138,28 +158,74 @@ See [Spawning a Dev Agent](#spawning-a-dev-agent) for the full procedure.
 Send the task via `send_to_session` including:
 - The todo ID
 - Clear description of what to do
+- Target repo(s) and any service/time-window constraints for production triage
+- Explicit repo skill paths to load first for log/observability investigations
 - Any relevant context (Sentry findings, user requirements, etc.)
 - For multi-repo sequential tasks: results from the previous agent
 
+When routing to `product-ops-agent`, use a **strict task envelope**. Every message must include:
+- `todo_id`
+- `thread_ref` (Slack `channel` + `thread_ts`, or equivalent source thread identifier)
+- `repos` (explicit repo name(s) under `~/workspace/`)
+- `repo_skill_paths` (absolute `SKILL.md` paths that must be loaded before investigation; `[]` allowed only when no repo-specific skills exist)
+- `time_window` (explicit range + timezone; use `n/a` if no prod logs needed)
+- `objective` (single concise statement of what to resolve)
+- `done_when` (clear completion criteria)
+- `deployment_marker` (commit SHA / deploy time / incident link, or `n/a`)
+- `mode` (`follow_up_same_thread` or `new_thread`)
+- `response_mode` (`inline_wait` when using `wait_until: turn_end`, or `async_callback` when using fire-and-forget)
+
+Notes:
+- Do **not** include `request_type`; product and production questions may be mixed in one task.
+- If `mode = new_thread` and active thread/todo differs, clear the subagent context first (`send_to_session` with `action: clear`).
+- Set `response_mode` explicitly on every task (`inline_wait` vs `async_callback`) so handoff expectations are unambiguous.
+- Require `product-ops-agent` to acknowledge which guidance/skills were loaded **before** any conclusions.
+- For production/log questions, include explicit `repo_skill_paths`; generic "load repo skills" instructions are insufficient.
+- For `polytomic` log investigations, always include both:
+  - `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
+  - `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
+
+**Repo-skill preload handshake (required for log triage):**
+1. In the task envelope, provide `repo_skill_paths` with absolute paths.
+2. Ask `product-ops-agent` to respond first with `loaded_repo_skills` (exact paths loaded).
+3. Only after preload confirmation should it run Datadog/Mezmo/log queries and report findings.
+
+For `polytomic` production/log tasks, always set `repo_skill_paths` to:
+- `~/workspace/polytomic/.agents/skills/polytomic-log-investigation/SKILL.md`
+- `~/workspace/polytomic/.agents/skills/mezmo-loglines/SKILL.md`
+
+**Delegation reliability contract (required):**
+- For `product-ops-agent` tasks, default to `send_to_session` with `wait_until: turn_end` for the primary request so you always capture a bounded response path.
+- If you intentionally use fire-and-forget delivery (no `wait_until`), explicitly require `product-ops-agent` to send a final handoff to you via `send_to_session` using `sender_info` (do not assume local completion implies relay).
+- If `wait_until: turn_end` times out or errors, recover immediately:
+  1. `send_to_session` with `action: get_summary` to capture current progress.
+  2. Re-send a focused follow-up requiring final handoff.
+  3. Post a status update in the user thread ("still investigating") and keep the todo active.
+- Never leave a task in `in-progress` without either a user-visible progress update or a final relay.
+
 ### 6. Relay progress
 
-When dev-agent reports milestones (PR opened, CI status, preview URL), post updates to the original Slack thread / email.
+When subagents or dev-agent report milestones/findings, post updates to the original Slack thread / email.
 
 ### 7. Close out
 
-When dev-agent reports completion:
-- **Spot-check the PR diff** before reporting success to the user — especially for new code. Use `gh pr diff <number>` or read the changed files. Look for obvious issues: string interpolation in queries, missing auth prefixes, hardcoded values, missing doc updates. Don't take "task complete" at face value for complex tasks.
+When a worker reports completion:
+- If it was a **dev-agent** task, **spot-check the PR diff** before reporting success to the user — especially for new code. Use `gh pr diff <number>` or read the changed files. Look for obvious issues: string interpolation in queries, missing auth prefixes, hardcoded values, missing doc updates. Don't take "task complete" at face value for complex tasks.
 - Update the todo with results, set status to `done`
 - Reply to the **original channel** (Slack → Slack thread, email → email reply, chat → chat)
-- Share PR link and preview URL
-- Clean up the agent (see [Cleanup](#cleanup))
+- Share applicable outputs:
+  - product-ops-agent: relay using structured mrkdwn (Answer, How, Operator notes, Evidence, Caveats, Confidence)
+  - dev-agent: PR link, CI status, preview URL
+- Clean up task-scoped dev-agents/worktrees (see [Cleanup](#cleanup))
 
 ### Routing User Follow-ups
 
 If the user sends follow-up messages while a task is in progress (e.g. "also add X", "actually change the approach"):
 
-1. Forward the new instructions to the dev-agent via `send_to_session`, referencing the existing todo ID
-2. Dev-agent incorporates the feedback into its current work
+1. If the follow-up maps to the active `product-ops-agent` thread/todo, process it immediately (queue priority rule)
+2. Forward the instructions to the currently assigned worker via `send_to_session`, referencing the existing todo ID
+3. If the assigned worker is `product-ops-agent` and the follow-up now requires code changes, escalate by spawning a dev-agent and pass full context
+4. Continue relaying progress in the same user thread
 
 ### Escalation
 
@@ -171,16 +237,21 @@ If dev-agent reports repeated failures (e.g. CI failing after 3+ fix attempts, o
 
 ## Spawning a Dev Agent
 
-Pick the model based on which API key is available (check env vars in this order):
+Pick the model in this order:
+
+1. API key env vars (`.config/.env`)
+2. OAuth credentials (`~/.pi/agent/auth.json`)
 
 **Coding / orchestration (top-tier):**
 
-| API key | Model |
-|---------|-------|
-| `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-6` |
-| `OPENAI_API_KEY` | `openai/gpt-5.2-codex` |
-| `GEMINI_API_KEY` | `google/gemini-3-pro-preview` |
-| `OPENCODE_ZEN_API_KEY` | `opencode-zen/claude-opus-4-6` |
+| Credential source | Selector | Model |
+|-------------------|----------|-------|
+| API key env | `ANTHROPIC_API_KEY` | `anthropic/claude-opus-4-6` |
+| API key env | `OPENAI_API_KEY` | `openai/gpt-5.3-codex` |
+| API key env | `GEMINI_API_KEY` | `google/gemini-3-pro-preview` |
+| API key env | `OPENCODE_ZEN_API_KEY` | `opencode-zen/claude-opus-4-6` |
+| OAuth (`auth.json`) | provider `openai-codex` | `openai-codex/gpt-5.1-codex-mini` |
+| OAuth (`auth.json`) | provider `anthropic` | `anthropic/claude-opus-4-6` |
 
 Full procedure for spinning up a task-scoped dev agent:
 
@@ -213,7 +284,7 @@ git worktree add ~/workspace/worktrees/$BRANCH -b $BRANCH origin/main
 - `send_to_session` is a tool call, not a shell command.
 - `pi session spawn` and `--name` are not valid in this runtime.
 
-**Model note**: Dev agents use the top-tier model from the table above. For cheaper tasks (e.g. read-only analysis), use the cheap model from the sentry-agent table instead.
+**Model note**: Dev agents use the top-tier model from the table above. For cheaper tasks (e.g. read-only analysis), use the cheap model from the sentry-agent table instead. Cheap-tier resolution also checks API keys first, then OAuth; with `openai-codex` OAuth it resolves to `openai-codex/gpt-5.1-codex-mini`.
 
 ## Cleanup
 
@@ -240,11 +311,21 @@ If the agent's worktree has unpushed changes you want to preserve, skip worktree
 
 ### Sending Messages
 
-**Primary — bridge local API** (works in both broker and Socket Mode):
+**Primary for thread replies (including DMs) — `/reply` with `thread_id`:**
+```bash
+curl -s -X POST http://127.0.0.1:7890/reply \
+  -H 'Content-Type: application/json' \
+  -d '{"thread_id":"thread-1","text":"your message"}'
+```
+
+Use `/reply` whenever a bridge thread id is available (`[Bridge-Thread-ID: thread-N]`).
+This is required for DM threads because `/send` validates channel IDs.
+
+**Fallback (when no `thread_id` is available) — `/send`:**
 ```bash
 curl -s -X POST http://127.0.0.1:7890/send \
   -H 'Content-Type: application/json' \
-  -d '{"channel":"CHANNEL_ID","text":"your message","thread_ts":"optional"}'
+  -d '{"channel":"C123...","text":"your message","thread_ts":"optional"}'
 ```
 
 **Add a reaction:**
@@ -268,22 +349,30 @@ Source: Slack
 From: <@UXXXXXXX>
 Channel: <#C07ABCDEF>
 Thread: 1739581234.567890
+[Bridge-Thread-ID: thread-1]
 ---
 the actual user message here
 <<<END_EXTERNAL_UNTRUSTED_CONTENT>>>
 ```
 
-Use the Thread value as `thread_ts` when calling `/send` to reply in the same thread.
+Reply routing priority:
+1. If `[Bridge-Thread-ID: ...]` is present, use `/reply` with `thread_id`.
+2. Otherwise, use `/send` with `channel` + `thread_ts`.
+3. Never use `/send` for DM channels (`D...`) when a `thread_id` exists.
 
 ### Response Guidelines
 
 1. **Acknowledge immediately** — reply in the same thread so the user knows you received it.
-2. **Always reply in-thread** — never post to channel top-level; always include `thread_ts`.
+2. **Always reply in-thread** — prefer `/reply` with `thread_id`; if unavailable, include `thread_ts` via `/send`.
 3. **Report results to the same thread** — don't just update the todo; the user is waiting in Slack.
-4. **Keep it conversational** — Slack uses mrkdwn, not full markdown. Bullet points and bold are fine; skip headers and code blocks unless sharing actual code.
-5. **Post progress updates** if work takes >2 minutes.
-6. **Never silently fail** — if something breaks, tell the user in the thread.
-7. **Vercel preview links** — share preview URLs from dev-agent completion reports in the Slack thread.
+4. **Use structured mrkdwn for final answers** — multi-line is expected. Prefer bold section labels and short lists over a single paragraph.
+   - For product-ops relays, use this order: `*Answer:*`, `*How:*`, `*Operator notes:*`, `*Evidence:*`, `*Caveats:*`, `*Confidence:*`.
+   - Preserve concrete evidence (`path:line`, commit SHA, log/query window) from the worker handoff.
+   - If the worker returns unstructured prose, reformat it into the sectioned mrkdwn shape before posting.
+5. **Keep it conversational** — Slack uses mrkdwn, not full markdown. Bullet points and bold are fine; skip large headers and code blocks unless sharing actual code.
+6. **Post progress updates** if work takes >2 minutes.
+7. **Never silently fail** — if something breaks, tell the user in the thread.
+8. **Vercel preview links** — share preview URLs from dev-agent completion reports in the Slack thread.
 
 ## Startup
 
@@ -308,8 +397,9 @@ This removes stale `.sock` files, cleans dead aliases, and restarts the Gateway 
 - [ ] Reconcile autostart subagents with `subagent_manage`:
   1. Call `subagent_manage` with `action: reconcile`
   2. Call `subagent_manage` with `action: status`, `id: sentry-agent`
-  3. If `sentry-agent` is not running, call `subagent_manage` with `action: start`, `id: sentry-agent`
-- [ ] Send role assignment to the `sentry-agent` session
+  3. Call `subagent_manage` with `action: status`, `id: product-ops-agent`
+  4. If either subagent is not running, call `subagent_manage` with `action: start`, `id: <subagent-id>`
+- [ ] Send role assignment to `sentry-agent` and `product-ops-agent` sessions
 - [ ] Clean up any stale dev-agent worktrees/tmux sessions from previous runs
 
 **Note**: Dev agents are NOT started at startup. They are spawned on-demand when tasks arrive.
@@ -329,9 +419,11 @@ Common actions:
 - `start` / `stop` — start or stop a package session by `id`
 - `reconcile` — ensure all installed+enabled+autostart packages are running
 
-Use `subagent_manage` for `sentry-agent` startup and recovery. Do not use raw `tmux new-session` shell commands.
+Use `subagent_manage` for subagent startup and recovery (`sentry-agent`, `product-ops-agent`, and future packages). Do not use raw `tmux new-session` shell commands.
 
-The sentry-agent operates in **on-demand mode** — it does NOT poll. Sentry alerts arrive via the Gateway bridge in real-time and are forwarded by you. The sentry-agent uses `sentry_monitor get <issue_id>` to investigate when asked.
+Subagent operating modes:
+- `sentry-agent` operates in **on-demand mode** — it does NOT poll. Sentry alerts arrive via the Gateway bridge in real-time and are forwarded by you. The sentry-agent uses `sentry_monitor get <issue_id>` to investigate when asked.
+- `product-ops-agent` handles **read-only product Q&A and production triage**. Route investigation requests there first; escalate to dev-agent when code changes are required.
 
 ### Starting the Gateway bridge
 
@@ -360,7 +452,7 @@ Health checks run automatically every ~10 minutes via the `heartbeat.ts` extensi
 If you need to check manually, use `heartbeat trigger` to run all checks immediately.
 
 When the heartbeat reports a failure, take the appropriate action:
-1. **Missing sentry-agent**: Call `subagent_manage` with `action: start`, `id: sentry-agent`, then re-send role assignment.
+1. **Missing subagent** (`sentry-agent`, `product-ops-agent`, etc.): Call `subagent_manage` with `action: start`, `id: <subagent-id>`, then re-send role assignment.
 2. **Orphaned dev-agents**: Kill tmux session and remove worktree.
 3. **Bridge down**: Restart via `startup-pi.sh`, then check `~/.pi/agent/logs/gateway-bridge.log` (fallback: `~/.pi/agent/logs/slack-bridge.log`).
 4. **Stale worktrees**: `git worktree remove --force` + `rmdir` empty parents.
