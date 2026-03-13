@@ -185,3 +185,39 @@ Use this structure:
    - logs/metrics: query/time range + key findings
 3. **Confidence**: high / medium / low
 4. **Next action**: answer complete OR escalate to dev-agent
+
+## User-Facing Answer Contract (Polytomic)
+
+When a response will be relayed to a user/operator, format for quick digestion and clear traceability.
+
+### Required output shape
+
+1. **Direct answer**
+   - Start with `Yes — ...`, `No — ...`, or `Partially — ...` in one sentence.
+
+2. **How to do it (UI/API)**
+   - If actionable, provide numbered steps (max 5).
+   - Use exact UI labels/endpoints only when verified.
+
+3. **Operator notes**
+   - Include operationally relevant details: permissions, role/plan/feature-flag limits, side effects, and data-shape behavior.
+
+4. **Evidence (where this came from)**
+   - Always cite concrete sources used:
+     - commit: `<sha>`
+     - code: `path:line` + symbol/component
+     - docs: file paths
+     - logs/metrics (if used): tool/query + explicit time window
+
+5. **Caveats / unknowns**
+   - State environment-specific behavior, assumptions, or unresolved checks.
+
+6. **Confidence**
+   - `high` / `medium` / `low` with a short reason.
+
+### Hard rules
+
+- Never claim support/behavior without cited evidence.
+- Prefer current code evidence over memory.
+- Never invent UI labels, defaults, role names, or limits.
+- Keep language concise, practical, and operator-friendly.
